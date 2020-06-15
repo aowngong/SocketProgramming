@@ -20,12 +20,12 @@ pthread_mutex_t lock;
 FILE* fpReceive;
 FILE* fpSend;
 int ServerSocket;
-void main(int argc, char ** argv)
+int main(int argc, char ** argv)
 {
   if (argc != 3)
   {
     printf("Not enough arguments\n");
-    return;
+    exit(1);
   }
   fpReceive =  fopen("ReceivedFile","w");
   fpSend = fopen("5M.b","r");
@@ -34,7 +34,7 @@ void main(int argc, char ** argv)
       printf("Invalid file opened\n");
       exit(1);
   }
-  struct sockaddr_in server,client;
+  struct sockaddr_in server;
   ServerSocket = socket(AF_INET,SOCK_STREAM,0);
   //unsigned int length = sizeof(struct sockaddr);
   //SOCK_STREAM = TCP
@@ -48,14 +48,14 @@ void main(int argc, char ** argv)
   if(inet_pton(AF_INET, argv[1], &(server.sin_addr))<=0)
   {
       printf("Invalid IP Address Given\n");
-      return;
+      exit(1);
   }
   server.sin_port = htons(strtol(argv[2],NULL,10));
   bzero(&server.sin_zero,8);
   if (connect(ServerSocket, (struct sockaddr *)&server, sizeof(server)) < 0)
       {
           printf("Connection Failed \n");
-          return;
+          exit(1);
       }
   else
   {
@@ -63,38 +63,38 @@ void main(int argc, char ** argv)
   }
     if (pthread_mutex_init(&lock, NULL) != 0) {
      printf("mutex init has failed\n");
-     return;
+     exit(1);
    }
 
     int rtv = pthread_create(&tid[0], NULL ,receive, ( void *)&ServerSocket);
     if ( rtv != 0)
     {
     printf (" ERROR;  pthread_create1()   returns   %d\n" , rtv);
-    return;
+    exit(1);
     }
     int rtv1 = pthread_create(&tid[1], NULL ,sending, ( void *)&ServerSocket);
     if ( rtv != 0)
     {
     printf (" ERROR;  pthread_create2()   returns   %d\n" , rtv1);
-    return;
+    exit(1);
     }
     rtv = pthread_join( tid[0] , NULL );
     if ( rtv != 0)
     {
     printf (" ERROR ; pthread_join1()   returns   %d\n" , rtv);
-    return;
+    exit(1);
     }
     rtv1 = pthread_join( tid[1] , NULL );
     if ( rtv1 != 0)
     {
     printf (" ERROR ; pthread_join2()   returns   %d\n" , rtv1);
-    return;
+    exit(1);
     }
     pthread_mutex_destroy(&lock);
   fclose(fpSend);
   fclose(fpReceive);
   close(ServerSocket);
-  return;
+  return 0;
 }
 
 void* receive(void* arg){
@@ -126,14 +126,10 @@ void* receive(void* arg){
 void* sending(void* arg)
 {
   //int ServerSocket = *((int *)arg);;
-  int replySize = 0;
-  int data_len = 0;
-  char reply[buff_size];
   int fd = fileno(fpSend); //file descriptor for file about to be sent
   long bytes = 0;
   time_t startTime = time(NULL);
   int sent = 0;
-  int cur = 0;
   do{
     sent = sendfile(ServerSocket,fd,NULL,buff_size);
     //printf("Sent: %d bytes\n",sent);

@@ -20,12 +20,12 @@ FILE* fpSend;
 FILE* fpReceive;
 int ServerSocket;
 int ClientSocket;
-void main(int argc, char ** argv)
+int main(int argc, char ** argv)
 {
   if (argc != 2)
   {
     printf("Not enough arguments\n");
-    return;
+    exit(1);
   }
   fpSend = fopen("5M.b","r");
   if (fpSend == NULL)
@@ -62,8 +62,7 @@ void main(int argc, char ** argv)
     perror("listen: ");
     exit(-1);
   }
-  char recv_buffer[buff_size];
-  int sockaddr_len = sizeof(struct sockaddr_in);
+  unsigned int sockaddr_len = sizeof(struct sockaddr_in);
   ClientSocket = -1;
   ClientSocket = accept(ServerSocket,(struct sockaddr*)&client,&sockaddr_len);
     if(ClientSocket == -1) //client is empty but it will get info from accept function
@@ -78,34 +77,34 @@ void main(int argc, char ** argv)
     }
     if (pthread_mutex_init(&lock, NULL) != 0) {
      printf("\n mutex init has failed\n");
-     return;
+     exit(1);
    }
 
     int rtv = pthread_create(&tid[0], NULL ,receive, ( void *)&ClientSocket);
     if ( rtv != 0)
     {
     printf (" ERROR;  pthread_create1()   returns   %d\n" , rtv);
-    return;
+    exit(1);
     }
     int rtv1 = pthread_create(&tid[1], NULL ,sending, ( void *)&ClientSocket);
 
     if ( rtv1 != 0)
     {
     printf (" ERROR;  pthread_create2()   returns   %d\n" , rtv1);
-    return;
+    exit(1);
     }
 
     rtv = pthread_join( tid[0] , NULL );
     if ( rtv != 0)
     {
     printf (" ERROR ; pthread_join1()   returns   %d\n" , rtv);
-    return;
+    exit(1);
     }
     rtv1 = pthread_join( tid[1] , NULL );
     if ( rtv1 != 0)
     {
     printf (" ERROR ; pthread_join2()   returns   %d\n" , rtv1);
-    return;
+    exit(1);
     }
     pthread_mutex_destroy(&lock);
   printf("Speed Test Finished\n");
@@ -113,7 +112,7 @@ void main(int argc, char ** argv)
   fclose(fpSend);
   close(ServerSocket);
   close(ClientSocket);
-  return;
+  return 0;
 }
 
 void* receive(void* arg){
@@ -144,15 +143,11 @@ void* receive(void* arg){
 void* sending(void* arg)
 {
   //int ClientSocket = *((int *)arg);;
-  int replySize = 0;
-  int data_len = 0;
-  char reply[buff_size];
   int fd = fileno(fpSend); //file descriptor for file about to be sent
 
   long bytes = 0;
   time_t startTime = time(NULL);
   int sent = 0;
-  int cur = 0;
   do{
     sent = sendfile(ClientSocket,fd,NULL,buff_size);
     //printf("Sent: %d bytes\n",sent);
