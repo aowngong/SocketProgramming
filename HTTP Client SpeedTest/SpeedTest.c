@@ -8,13 +8,20 @@
 #include <string.h>
 #include <sys/time.h>
 #include <error.h>
+#include <signal.h>
 #define FULLTEST 2
 #define UPLOAD 1
 #define DOWNLOAD 0
 #define buff_size 8192
+#include <signal.h>
 static int receive(int socket, double* speed);
-static int sending(int socket, double* speed);
+static int sending(int ServerSocket, double *speed,int port,char* ip);
+void intHandler(int dummy);
 int speedTest(char* IPv4, char* port, double* DLSpeed, double *UPSpeed, int mode);
+int keepRunning = 1;
+void intHandler(int dummy) {
+    keepRunning = 0;
+}
 int main(int argc, char ** argv)
 {
   if (argc != 3)
@@ -24,19 +31,38 @@ int main(int argc, char ** argv)
   }
   double DLSpeed = 0;
   double UPSpeed = 0;
-  int mode = speedTest(argv[1],argv[2],&DLSpeed,&UPSpeed,FULLTEST);
-  if (mode == FULLTEST)
+  int mode = 0;
+  FILE *fp = fopen("log.csv","w");
+  fprintf(fp,"Download (Mbps),Upload (Mbps),\n");
+  fclose(fp);
+  signal(SIGINT, intHandler);
+  while(keepRunning)
   {
-    fprintf(stderr,"Average Download Speed: %.3lf Mbit/s\n",DLSpeed);
-    fprintf(stderr,"Average Upload Speed: %.3lf Mbit/s\n",UPSpeed);
-  }
-  else if (mode == DOWNLOAD)
-  {
-    fprintf(stderr,"Average Download Speed: %.3lf Mbit/s\n",DLSpeed);
-  }
+    fp = fopen("log.csv","a");
+    mode = speedTest(argv[1],argv[2],&DLSpeed,&UPSpeed,FULLTEST);
+    if (mode == FULLTEST)
+    {
+      fprintf(stderr,"Average Download Speed: %.3lf Mbit/s\n",DLSpeed);
+      fprintf(stderr,"Average Upload Speed: %.3lf Mbit/s\n",UPSpeed);
+      fprintf(fp,"%.3lf,%.3lf,\n",DLSpeed,UPSpeed);
+    }
+    else if (mode == DOWNLOAD)
+    {
+      fprintf(stderr,"Average Download Speed: %.3lf Mbit/s\n",DLSpeed);
+      fprintf(fp,"%.3lf,\n",DLSpeed);
+    }
     else if (mode == UPLOAD)
-  {
-    fprintf(stderr,"Average Upload Speed: %.3lf Mbit/s\n",UPSpeed);
+    {
+      fprintf(stderr,"Average Upload Speed: %.3lf Mbit/s\n",UPSpeed);
+      fprintf(fp,"%.3lf,\n",UPSpeed);
+    }
+    else if (mode == -1)
+    {
+      fclose(fp);
+      return -1;
+    }
+    fclose(fp);
+    sleep(300);
   }
   return 0;
 }
@@ -68,14 +94,26 @@ int speedTest(char* IPv4, char* port, double* DLSpeed, double *UPSpeed, int mode
   }
   if (mode == FULLTEST)
   {
-    if (receive(ServerSocket,DLSpeed) == 0 && sending(ServerSocket,UPSpeed) == 0)
+    int downloadCode = receive(ServerSocket,DLSpeed);
+    int uploadCode = sending(ServerSocket,UPSpeed,ntohs(server.sin_port),inet_ntoa(server.sin_addr));
+    if (uploadCode == 0 && downloadCode == 0)
     {
       close(ServerSocket);
       return FULLTEST;
     }
+    else if (uploadCode == -1 && downloadCode == -1)
+    {
+      fprintf(stderr,"Error with both download and upload test\n");
+      return -1;
+    }
+    else if (uploadCode == -1 )
+    {
+      fprintf(stderr,"Error with upload test\n");
+      return -1;
+    }
     else
     {
-      fprintf(stderr,"Error\n");
+      fprintf(stderr,"Error with download test\n");
       return -1;
     }
     
@@ -89,20 +127,20 @@ int speedTest(char* IPv4, char* port, double* DLSpeed, double *UPSpeed, int mode
     }
     else
     {
-      fprintf(stderr,"Error\n");
+      fprintf(stderr,"Error with Download Test\n");
       return -1;
     }
   }
   else if (mode == UPLOAD)
   {
-    if(sending(ServerSocket,UPSpeed) == 0)
+    if(sending(ServerSocket,UPSpeed,ntohs(server.sin_port),inet_ntoa(server.sin_addr)) == 0)
     {
       close(ServerSocket);
       return UPLOAD;
     }
     else
     {
-      fprintf(stderr,"Error\n");
+      fprintf(stderr,"Error with Upload Test\n");
       return -1;
     }
   }
@@ -114,7 +152,7 @@ static int receive(int ServerSocket, double *speed){
   //int ServerSocket = *((int *)arg);
   char *recv_buffer = malloc(sizeof(char)*buff_size);
   long bytes = 0;
-  char message[] = "GET /1Ms.b HTTP/1.1\r\nHost: 192.168.50.254\r\n\r\n";
+  char message[] = "GET /2M.b HTTP/1.1\r\nHost: 192.168.50.254\r\n\r\n";
   char response[] = "HTTP/1.1 200";
   char sizeMessage[] = "Content-Length: ";
   struct timeval stop, start;
@@ -126,6 +164,11 @@ static int receive(int ServerSocket, double *speed){
   }
   data_len = recv(ServerSocket,recv_buffer,buff_size,0);
   char *EndofHeaderPtr = strstr(recv_buffer, "\r\n\r\n");
+  if (EndofHeaderPtr == NULL)
+  {
+    free(recv_buffer);
+    return -1;
+  }
   EndofHeaderPtr = &EndofHeaderPtr[4];
   if (EndofHeaderPtr != NULL)
   {
@@ -156,27 +199,30 @@ static int receive(int ServerSocket, double *speed){
     memcpy(filesizeStr,ptr,sizeof(char)*ctr);
     long filesize =  strtol(filesizeStr, NULL, 10);
     free(filesizeStr);
-    if (data_len && (strncmp(recv_buffer, response, strlen(response))==0))
-    {
-      fprintf(stderr,"HTTP OK received\n");
+    if (data_len && (strncmp(recv_buffer, response, strlen(response))==0)) {
+      //fprintf(stderr,"HTTP OK received\n");
       gettimeofday(&start, NULL);
-    do{
-        data_len = recv(ServerSocket,recv_buffer,buff_size,0);
-        bytes = bytes + data_len;
-        if (bytes >= filesize)
-        {
-          free(recv_buffer);
-          break;
-        }
-
-    } while(data_len);
-    gettimeofday(&stop, NULL);
-    ///printf("took %lu us\n", (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec);
-    double usecs = (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec;
-    *speed = 8*bytes/usecs; //becomes Mb/s
-    return 0;
-  }
-  
+      do{
+          data_len = recv(ServerSocket,recv_buffer,buff_size,0);
+          bytes = bytes + data_len;
+          if (bytes >= filesize)
+          {
+            free(recv_buffer);
+            break;
+          }
+        } while(data_len);
+        gettimeofday(&stop, NULL);
+        ///printf("took %lu us\n", (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec);
+        double usecs = (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec;
+        *speed = 8*bytes/usecs; //becomes Mb/s
+        return 0;
+       }
+    else if (strncmp(recv_buffer, "HTTP/1.1 302", strlen(response))==0)
+      { 
+        printf("Download file not found\n");
+        free(recv_buffer);
+        return -1;
+      }
   }
   else
   {
@@ -185,27 +231,72 @@ static int receive(int ServerSocket, double *speed){
   }
   return -1;
 }
-static int sending(int ServerSocket, double *speed)
+static int sending(int ServerSocket, double *speed,int port,char* ip)
 {
-  //int ServerSocket = *((int *)arg);;
-  struct timeval stop, start;
-  long bytes = 0;
+  int packets2send = 1024*4;
+  int size = buff_size*packets2send;
   int sent = 0;
-  char *send_buffer = calloc(buff_size,sizeof(char));
-  if (send_buffer == NULL)
+  long bytes = 0;
+  char cont[] = "HTTP/1.1 100 Continue";
+  //printf("Port: %d\n",port);
+  //printf("IP: %s\n",ip);
+  struct timeval stop, start;
+  dprintf(ServerSocket,"POST /process.php HTTP/1.1\r\nHost: %s:%d\r\n"
+  "User-Agent: VIPTest\r\nAccept: */*\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n"
+  "Content-Type: multipart/form-data;\r\nExpect: 100-continue\r\n\r\n",ip,port,size);\
+  char *recv_buffer = malloc(sizeof(char)*buff_size);
+  if (recv_buffer == NULL)
   {
     return -1;
   }
+  recv(ServerSocket,recv_buffer,buff_size,0);
+  if (strncmp(recv_buffer,cont,strlen(cont))!=0)
+  {
+      free(recv_buffer);
+      fprintf(stderr,"%.12s received\n",recv_buffer);
+      return -1;
+  }
+  else
+  {
+    //fprintf(stderr,"HTTP/1.1 100 Continue Received\n");
+  }
+  //printf("%s",recv_buffer);
+  char *send_buffer = calloc(buff_size,sizeof(char));
+  if (send_buffer == NULL)
+  {
+    free(recv_buffer);
+    return -1;
+  }
   gettimeofday(&start, NULL);
-  do{
-    sent = write(ServerSocket,send_buffer,buff_size);
-    //printf("Sent: %d bytes\n",sent);
+  for (int i = 0; i<packets2send; i++)
+  {
+    sent = send(ServerSocket,send_buffer,buff_size,0);
     bytes = bytes + sent;
-  } while(bytes<buff_size*1024);
+    if (sent!=buff_size)
+    {
+      send(ServerSocket,send_buffer,buff_size-sent,0);
+    }
+  }
+  recv(ServerSocket,recv_buffer,buff_size,0);
   gettimeofday(&stop, NULL);
-  shutdown(ServerSocket,1);
+  char response[] = "HTTP/1.1 200";
+  //printf("%s",recv_buffer);
+  if ((strncmp(recv_buffer, response, strlen(response))==0)) {
+      //printf("HTTP OK received\n");
+      double usecs = (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec;
+      *speed = 8*bytes/usecs; //becomes Mb/s
+  }
+  else
+    {
+      printf("%s",recv_buffer);
+      *speed = 0;
+      free(recv_buffer);
+      free(send_buffer);
+      return -1;
+    }
+  
+  free(recv_buffer);
   free(send_buffer);
-  double usecs = (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec;
-  *speed = 8*bytes/usecs; //becomes Mb/s
+  shutdown(ServerSocket,1);
   return 0;
 }
