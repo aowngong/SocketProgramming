@@ -14,13 +14,16 @@
 #define UPLOAD 1
 #define DOWNLOAD 0
 #define buff_size 8192
+#define DATAPOINTS 12
 #include <signal.h>
-static int receive(int socket, double* speed);
-static int sending(int ServerSocket, double *speed,int port,char* ip);
-void intHandler(int dummy);
-int speedTest(char* IPv4, char* port, double* DLSpeed, double *UPSpeed, int mode);
+static int receive(int socket, double* speed, int filesize);
+static int sending(int ServerSocket, double *speed,int port,char* ip, int packets);
+static int repeatTester(struct sockaddr_in server, int ServerSocket, double *DLSpeed, double *UPSpeed, int *packets, int *filesize, int mode);
+static void intHandler(int dummy);
+static void packetSize(int *packets, int *filesize, double DLSpeed, double UPSpeed);
+int speedTest(char* IPv4, char* port, double* DLSpeedArray, double *UPSpeedArray, int mode);
 int keepRunning = 1;
-void intHandler(int dummy) {
+static void intHandler(int dummy) {
     keepRunning = 0;
 }
 int main(int argc, char ** argv)
@@ -30,8 +33,8 @@ int main(int argc, char ** argv)
     fprintf(stderr,"Not enough arguments\n Enter IP address and Port Number to connect to. \n Example: 10.0.0.1 9009\n");
     exit(1);
   }
-  double DLSpeed = 0;
-  double UPSpeed = 0;
+  double *DLSpeedArray = malloc(sizeof(double)*DATAPOINTS);
+  double *UPSpeedArray = malloc(sizeof(double)*DATAPOINTS);
   int mode = 0;
   FILE *fp = fopen("log.csv","w");
   fprintf(fp,"Download (Mbps),Upload (Mbps),\n");
@@ -40,22 +43,33 @@ int main(int argc, char ** argv)
   while(keepRunning)
   {
     fp = fopen("log.csv","a");
-    mode = speedTest(argv[1],argv[2],&DLSpeed,&UPSpeed,FULLTEST);
+    mode = speedTest(argv[1],argv[2],DLSpeedArray,UPSpeedArray,FULLTEST);
     if (mode == FULLTEST)
     {
-      fprintf(stderr,"Average Download Speed: %.3lf Mbit/s\n",DLSpeed);
-      fprintf(stderr,"Average Upload Speed: %.3lf Mbit/s\n",UPSpeed);
-      fprintf(fp,"%.3lf,%.3lf,\n",DLSpeed,UPSpeed);
+      //fprintf(stderr,"Average Download Speed: %.3lf Mbit/s\n",DLSpeed);
+      //fprintf(stderr,"Average Upload Speed: %.3lf Mbit/s\n",UPSpeed);
+      //fprintf(fp,"%.3lf,%.3lf,\n",DLSpeed,UPSpeed);
+      for (int i = 0; i<DATAPOINTS; i++)
+      {
+        printf("Download[%d]: %lf\nUpload[%d]: %lf\n\n",i,DLSpeedArray[i],i,UPSpeedArray[i]);
+        fprintf(fp,"%.3lf,%.3lf,\n",DLSpeedArray[i],UPSpeedArray[i]);
+      }
     }
     else if (mode == DOWNLOAD)
     {
-      fprintf(stderr,"Average Download Speed: %.3lf Mbit/s\n",DLSpeed);
-      fprintf(fp,"%.3lf,N/A,\n",DLSpeed);
+      //fprintf(stderr,"Average Download Speed: %.3lf Mbit/s\n",DLSpeed);
+      for (int i = 0; i<DATAPOINTS; i++)
+      {
+        fprintf(fp,"%.3lf,N/A,\n",DLSpeedArray[i]);
+      }
     }
     else if (mode == UPLOAD)
     {
-      fprintf(stderr,"Average Upload Speed: %.3lf Mbit/s\n",UPSpeed);
-      fprintf(fp,"N/A,%.3lf,\n",UPSpeed);
+      //fprintf(stderr,"Average Upload Speed: %.3lf Mbit/s\n",UPSpeed);
+      for (int i = 0; i<DATAPOINTS; i++)
+      {
+        fprintf(fp,"N/A,%.3lf,\n",UPSpeedArray[i]);
+      }
     }
     else if (mode == -1)
     {
@@ -63,12 +77,15 @@ int main(int argc, char ** argv)
       return -1;
     }
     fclose(fp);
-    sleep(10); 
+    //sleep(10); 
+    break;
   }
+  free(DLSpeedArray);
+  free(UPSpeedArray);
   return 0;
 }
 
-int speedTest(char* IPv4, char* port, double* DLSpeed, double *UPSpeed, int mode)
+int speedTest(char* IPv4, char* port, double* DLSpeedArray, double *UPSpeedArray, int mode)
 {
   struct sockaddr_in server;
   const int ServerSocket = socket(AF_INET,SOCK_STREAM,0);
@@ -93,76 +110,120 @@ int speedTest(char* IPv4, char* port, double* DLSpeed, double *UPSpeed, int mode
   {
       fprintf(stderr,"Connected to server port no %d and IP %s\n",ntohs(server.sin_port),inet_ntoa(server.sin_addr));
   }
-  if (mode == FULLTEST)
+  int packets = 2000;
+  int filesize = 16;
+  double DLSpeed = 0;
+  double UPSpeed = 0;
+  int flag = 0;
+  for (int i = 0; i<DATAPOINTS; i++)
   {
-    int downloadCode = receive(ServerSocket,DLSpeed);
-    int uploadCode = sending(ServerSocket,UPSpeed,ntohs(server.sin_port),inet_ntoa(server.sin_addr));
+    flag = repeatTester(server,ServerSocket,&DLSpeed,&UPSpeed,&packets,&filesize,mode);
+    packetSize(&packets,&filesize,DLSpeed,UPSpeed);
+    //printf("New packets: %d\n",packets);
+    //printf("New filesize: %d\n",filesize);
+    if (flag == FULLTEST)
+    {
+      DLSpeedArray[i] = DLSpeed;
+      UPSpeedArray[i] = UPSpeed;
+    }
+    else if (flag == DOWNLOAD)
+    {
+      DLSpeedArray[i] = DLSpeed;
+    }
+    else if (flag == UPLOAD)
+    {
+      UPSpeedArray[i] = UPSpeed;
+    }
+  }
+  close(ServerSocket);
+  if (flag == FULLTEST)
+  {
+    return FULLTEST;
+  }
+  else if (flag == DOWNLOAD)
+  {
+    return DOWNLOAD;
+  }
+  else if (flag == UPLOAD)
+  {
+    return UPLOAD;
+  }
+  else
+  {
+    return -1;
+  }
+}
+static int repeatTester(struct sockaddr_in server, int ServerSocket, double *DLSpeed, double *UPSpeed, int *packets, int *filesize, int mode)
+{
+
+   if (mode == FULLTEST)
+  {
+    int downloadCode = receive(ServerSocket,DLSpeed,*filesize);
+    int uploadCode = sending(ServerSocket,UPSpeed,ntohs(server.sin_port),inet_ntoa(server.sin_addr),*packets);
     if (uploadCode == 0 && downloadCode == 0)
     {
-      close(ServerSocket);
       return FULLTEST;
     }
     else if (uploadCode == -1 && downloadCode == -1)
     {
       fprintf(stderr,"Error with both download and upload test\n");
-      return -1;
+      return -FULLTEST;
     }
     else if (uploadCode == -1 )
     {
       fprintf(stderr,"Error with upload test\n");
-      return -1;
+      return -UPLOAD;
     }
     else
     {
       fprintf(stderr,"Error with download test\n");
-      return -1;
+      return -DOWNLOAD;
     }
     
   }
   else if (mode == DOWNLOAD)
   {
-    if (receive(ServerSocket,DLSpeed) == 0)
+    if (receive(ServerSocket,DLSpeed,*filesize) == 0)
     {
-      close(ServerSocket);
+
       return DOWNLOAD;
     }
     else
     {
       fprintf(stderr,"Error with Download Test\n");
-      return -1;
+      return -DOWNLOAD;
     }
   }
   else if (mode == UPLOAD)
   {
-    if(sending(ServerSocket,UPSpeed,ntohs(server.sin_port),inet_ntoa(server.sin_addr)) == 0)
+    if(sending(ServerSocket,UPSpeed,ntohs(server.sin_port),inet_ntoa(server.sin_addr),*packets) == 0)
     {
-      close(ServerSocket);
       return UPLOAD;
     }
     else
     {
       fprintf(stderr,"Error with Upload Test\n");
-      return -1;
+      return -UPLOAD;
     }
   }
   return -1;
 }
 
-static int receive(int ServerSocket, double *speed){
+static int receive(int ServerSocket, double *speed, int filesize){
   int data_len = 0;
-  //int ServerSocket = *((int *)arg);
+  //int ServerSocket = *((int *)arg)  ;
   char *recv_buffer = malloc(sizeof(char)*buff_size);
+  if (recv_buffer == NULL)
+  {
+    return -1;
+  }
   long bytes = 0;
-  char message[] = "GET /2M.b HTTP/1.1\r\nHost: 192.168.50.254\r\n\r\n";
+  //char message[] = "GET /testFiles/4MB.b HTTP/1.1\r\nHost: 192.168.50.254\r\n\r\n";
   char response[] = "HTTP/1.1 200";
   char sizeMessage[] = "Content-Length: ";
   struct timeval stop, start;
-  data_len = write(ServerSocket,message,strlen(message));
-  if (data_len != strlen(message))
-  {
-    free(recv_buffer);
-    return -1;
-  }
+  dprintf(ServerSocket,"GET /testFiles/%dMB.b HTTP/1.1\r\nHost: 192.168.50.254\r\n\r\n",filesize);
+  //data_len = write(ServerSocket,message,strlen(message));
   data_len = recv(ServerSocket,recv_buffer,buff_size,0);
   char *EndofHeaderPtr = strstr(recv_buffer, "\r\n\r\n");
   if (EndofHeaderPtr == NULL)
@@ -232,9 +293,8 @@ static int receive(int ServerSocket, double *speed){
   }
   return -1;
 }
-static int sending(int ServerSocket, double *speed,int port,char* ip)
+static int sending(int ServerSocket, double *speed,int port,char* ip, int packets2send)
 {
-  int packets2send = 1000;
   int size = buff_size*packets2send;
   int sent = 0;
   long bytes = 0;
@@ -263,16 +323,6 @@ static int sending(int ServerSocket, double *speed,int port,char* ip)
     //fprintf(stderr,"HTTP/1.1 100 Continue Received\n");
   }
   //printf("%s",recv_buffer);
-  
-
-
-  FILE* fp1 = fopen("/dev/random","r");
-  if (fp1 == NULL)
-  {
-    printf("no file found\n");  
-    free(recv_buffer);
-    return -1;
-  }
   unsigned char *send_buffer = malloc(buff_size*sizeof(unsigned char));
   if (send_buffer == NULL)
   {
@@ -320,6 +370,57 @@ static int sending(int ServerSocket, double *speed,int port,char* ip)
   
   free(recv_buffer);
   free(send_buffer);
-  shutdown(ServerSocket,1);
+  //shutdown(ServerSocket,1);
   return 0;
+}
+static void packetSize(int *packets, int *filesize, double DLSpeed, double UPSpeed)
+{
+  if (DLSpeed <= 25)
+  {
+    *filesize = 2;
+  }
+  else if (DLSpeed <= 50)
+  {
+    *filesize = 4;}
+  else if (DLSpeed <= 100)
+  {
+    *filesize = 4;
+  }
+  else if (DLSpeed <= 200)
+  {
+    *filesize = 8;
+  }
+  else if (DLSpeed <= 400)
+  {
+    *filesize = 16;
+  }
+  else
+  {
+    *filesize = 32;
+  }
+
+    if (UPSpeed <= 25)
+  {
+    *packets = 400;
+  }
+  else if (UPSpeed <= 50)
+  {
+    *packets = 800;  }
+  else if (UPSpeed <= 100)
+  {
+    *packets = 1200;
+  }
+  else if (UPSpeed <= 200)
+  {
+    *packets = 2000;
+  }
+  else if (UPSpeed <= 400)
+  {
+    *packets = 4000;
+  }
+  else
+  {
+    *packets = 6000;
+  }
+  return;
 }
