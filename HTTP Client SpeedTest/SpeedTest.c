@@ -10,7 +10,6 @@
 #include <error.h>
 #include <signal.h>
 #include <time.h>
-#include <sys/sendfile.h>
 #define FULLTEST 2
 #define UPLOAD 1
 #define DOWNLOAD 0
@@ -64,7 +63,7 @@ int main(int argc, char ** argv)
       return -1;
     }
     fclose(fp);
-    sleep(100); 
+    sleep(10); 
   }
   return 0;
 }
