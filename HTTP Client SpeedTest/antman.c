@@ -3,10 +3,10 @@
 #define MAXLength 10000
 //argv[1] = IPv4 Address
 //argv[2] = Port number to be used
-static int sendSpeed(char *IPv4, char *Port);
+static int sendSpeed(char *IPv4, char *Port, int modeChosen);
 int getRandomInt(int low, int high, unsigned int *randval);
 static void catString(char *start, int *currentPos, char *str2Copy);
-static int createJSON(double *DLSpeedArray, double *UPSpeedArray, char *JSON, int *JSONlength);
+static int createJSON(double *DLSpeedArray, double *UPSpeedArray, char *JSON, int *JSONlength, int mode);
 static void getMaxMinAvg(double *DLSpeedArray, double *max, double *min, double *average);
 int main(int argc, char **argv)
 {
@@ -15,6 +15,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "Not enough arguments\n Enter IP address and Port Number to connect to. \n Example: 10.0.0.1 9009\n");
         exit(1);
     }
+    int modeChosen = DOWNLOAD;
     time_t rawtime;
     struct tm *timeinfo;
     time(&rawtime);
@@ -28,26 +29,27 @@ int main(int argc, char **argv)
     if (timeinfo->tm_hour >= 19 && timeinfo->tm_hour <= 22)
     {
         sleep(randval);
-        sendSpeed(argv[1], argv[2]);
+        sendSpeed(argv[1], argv[2], modeChosen);
     }
-    sendSpeed(argv[1], argv[2]);
+
+    sendSpeed(argv[1], argv[2], modeChosen);
     //sleep(300);
     return 0;
 }
-static int sendSpeed(char *IPv4, char *Port)
+static int sendSpeed(char *IPv4, char *Port, int modeChosen)
 {
-    double *DLSpeedArray = malloc(sizeof(double) * DATAPOINTS);
+    double *DLSpeedArray = calloc(DATAPOINTS, sizeof(double));
     if (DLSpeedArray == NULL)
     {
         return -1;
     }
-    double *UPSpeedArray = malloc(sizeof(double) * DATAPOINTS);
+    double *UPSpeedArray = calloc(DATAPOINTS, sizeof(double));
     if (UPSpeedArray == NULL)
     {
         free(DLSpeedArray);
         return -1;
     }
-    int mode = speedTest(IPv4, Port, DLSpeedArray, UPSpeedArray, FULLTEST);
+    int mode = speedTest(IPv4, Port, DLSpeedArray, UPSpeedArray, modeChosen);
     if (mode == FULLTEST)
     {
         for (int i = 0; i < DATAPOINTS; i++)
@@ -59,14 +61,14 @@ static int sendSpeed(char *IPv4, char *Port)
     {
         for (int i = 0; i < DATAPOINTS; i++)
         {
-            fprintf(stderr, "%.3lf,N/A,\n", DLSpeedArray[i]);
+            fprintf(stderr, "Download[%d]: %lf\n", i,DLSpeedArray[i]);
         }
     }
     else if (mode == UPLOAD)
     {
         for (int i = 0; i < DATAPOINTS; i++)
         {
-            fprintf(stderr, "N/A,%.3lf,\n", UPSpeedArray[i]);
+            fprintf(stderr, "Upload[%d]: %lf\n", i,UPSpeedArray[i]);
         }
     }
     else if (mode == -1)
@@ -78,7 +80,7 @@ static int sendSpeed(char *IPv4, char *Port)
     {
         return -1;
     }
-    int length = createJSON(DLSpeedArray, UPSpeedArray, JSON, &length);
+    int length = createJSON(DLSpeedArray, UPSpeedArray, JSON, &length, mode);
     free(JSON);
     free(DLSpeedArray);
     free(UPSpeedArray);
@@ -102,75 +104,91 @@ int getRandomInt(int low, int high, unsigned int *randval)
     return -1;
 }
 
-static int createJSON(double *DLSpeedArray, double *UPSpeedArray, char *JSON, int *JSONlength)
+static int createJSON(double *DLSpeedArray, double *UPSpeedArray, char *JSON, int *JSONlength, int mode)
 {
 
     FILE *fp = fopen("test.json", "w");
     int position = 0;
     catString(JSON, &position, "{\n");
     catString(JSON, &position, "\"SpeedTest\": {\n");
-    catString(JSON, &position, "    \"Download\": {\n");
-    catString(JSON, &position, "        \"Values\": [\n");
-    if (DLSpeedArray == NULL || UPSpeedArray == NULL)
+    char* speedBuffer = malloc(sizeof(char)*100);
+    if (mode == FULLTEST || mode == DOWNLOAD)
     {
-        return -1;
-    }
-    char speedBuffer[50];
-    for (int i = 0; i < DATAPOINTS; i++)
-    {
+        catString(JSON, &position, "    \"Download\": {\n");
+        catString(JSON, &position, "        \"Values\": [\n");
+        if (DLSpeedArray == NULL || UPSpeedArray == NULL)
+        {
+            return -1;
+        }
+        for (int i = 0; i < DATAPOINTS; i++)
+        {
 
-        if (i != DATAPOINTS - 1)
+            if (i != DATAPOINTS - 1)
+            {
+                snprintf(speedBuffer, 50, "            %0.3lf,\n", DLSpeedArray[i]);
+                catString(JSON, &position, speedBuffer);
+            }
+            else
+            {
+                snprintf(speedBuffer, 50, "            %0.3lf\n        ],\n", DLSpeedArray[i]);
+                catString(JSON, &position, speedBuffer);
+            }
+        }
+        double DLMax = -99999999999999;
+        double DLMin = 99999999999999;
+        double DLAvg = 0;
+        getMaxMinAvg(DLSpeedArray, &DLMax, &DLMin, &DLAvg);
+        snprintf(speedBuffer, 50, "        \"Max\": %.3lf,\n", DLMax);
+        catString(JSON, &position, speedBuffer);
+        snprintf(speedBuffer, 50, "        \"Min\": %.3lf,\n", DLMin);
+        catString(JSON, &position, speedBuffer);
+        snprintf(speedBuffer, 50, "        \"Average\": %.3lf\n", DLAvg);
+        catString(JSON, &position, speedBuffer);
+        catString(JSON, &position, "      }");
+        if (mode == FULLTEST)
         {
-            snprintf(speedBuffer, 50, "            %0.3lf,\n", DLSpeedArray[i]);
-            catString(JSON, &position, speedBuffer);
+            catString(JSON, &position, ",\n");
         }
         else
         {
-            snprintf(speedBuffer, 50, "            %0.3lf\n        ],\n", DLSpeedArray[i]);
-            catString(JSON, &position, speedBuffer);
+            catString(JSON, &position, "\n");
         }
     }
-    double DLMax = -99999999999999;
-    double DLMin = 99999999999999;
-    double DLAvg = 0;
-    getMaxMinAvg(DLSpeedArray, &DLMax, &DLMin, &DLAvg);
-    snprintf(speedBuffer, 50, "        \"Max\": %.3lf,\n", DLMax);
-    catString(JSON, &position, speedBuffer);
-    snprintf(speedBuffer, 50, "        \"Min\": %.3lf,\n", DLMin);
-    catString(JSON, &position, speedBuffer);
-    snprintf(speedBuffer, 50, "        \"Average\": %.3lf\n", DLAvg);
-    catString(JSON, &position, speedBuffer);
-    catString(JSON, &position, "      },\n");
-    catString(JSON, &position, "    \"Upload\": {\n");
-    catString(JSON, &position, "        \"Values\": [\n");
-    for (int i = 0; i < DATAPOINTS; i++)
+    if (mode == FULLTEST || mode == UPLOAD)
     {
-        if (i != DATAPOINTS - 1)
+        catString(JSON, &position, "    \"Upload\": {\n");
+        catString(JSON, &position, "        \"Values\": [\n");
+        for (int i = 0; i < DATAPOINTS; i++)
         {
-            snprintf(speedBuffer, 50, "            %0.3lf,\n", UPSpeedArray[i]);
-            catString(JSON, &position, speedBuffer);
+            if (i != DATAPOINTS - 1)
+            {
+                snprintf(speedBuffer, 50, "            %0.3lf,\n", UPSpeedArray[i]);
+                catString(JSON, &position, speedBuffer);
+            }
+            else
+            {
+                snprintf(speedBuffer, 50, "            %0.3lf\n        ],\n", UPSpeedArray[i]);
+                catString(JSON, &position, speedBuffer);
+            }
         }
-        else
-        {
-            snprintf(speedBuffer, 50, "            %0.3lf\n        ],\n", UPSpeedArray[i]);
-            catString(JSON, &position, speedBuffer);
-        }
+        double UPMax = -99999999999999;
+        double UPMin = 99999999999999;
+        double UPAvg = 0;
+        getMaxMinAvg(UPSpeedArray, &UPMax, &UPMin, &UPAvg);
+        snprintf(speedBuffer, 50, "        \"Max\": %.3lf,\n", UPMax);
+        catString(JSON, &position, speedBuffer);
+        snprintf(speedBuffer, 50, "        \"Min\": %.3lf,\n", UPMin);
+        catString(JSON, &position, speedBuffer);
+        snprintf(speedBuffer, 50, "        \"Average\": %.3lf\n", UPAvg);
+        catString(JSON, &position, speedBuffer);
+        catString(JSON, &position, "      }\n");
     }
-    double UPMax = -99999999999999;
-    double UPMin = 99999999999999;
-    double UPAvg = 0;
-    getMaxMinAvg(UPSpeedArray, &UPMax, &UPMin, &UPAvg);
-    snprintf(speedBuffer, 50, "        \"Max\": %.3lf,\n", UPMax);
-    catString(JSON, &position, speedBuffer);
-    snprintf(speedBuffer, 50, "        \"Min\": %.3lf,\n", UPMin);
-    catString(JSON, &position, speedBuffer);
-    snprintf(speedBuffer, 50, "        \"Average\": %.3lf\n", UPAvg);
-    catString(JSON, &position, speedBuffer);
-    catString(JSON,&position,"      }\n   }\n}");
+    catString(JSON, &position, "   }\n}");
     fprintf(fp, "%s", JSON);
+    //*JSONlength = position;
+    //printf("%d\n", *JSONlength);
     fclose(fp);
-    *JSONlength = position;
-    printf("%d\n",*JSONlength);
+    free(speedBuffer);
     return 0;
 }
 static void catString(char *start, int *currentPos, char *str2Copy)
