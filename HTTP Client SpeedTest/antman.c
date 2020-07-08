@@ -1,13 +1,17 @@
 #include "SpeedTest.h"
+#include "commands.h"
 #define SECS 10800 //seconds in 3 hours
 #define MAXLength 10000
 //argv[1] = IPv4 Address
 //argv[2] = Port number to be used
-static int sendSpeed(char *IPv4, char *Port, int modeChosen);
+static int sendSpeed(char *IPv4, char *Port, int modeChosen, int *ServerSocket);
 int getRandomInt(int low, int high, unsigned int *randval);
 static void catString(char *start, int *currentPos, char *str2Copy);
 static int createJSON(double *DLSpeedArray, double *UPSpeedArray, char *JSON, int *JSONlength, int mode);
 static void getMaxMinAvg(double *DLSpeedArray, double *max, double *min, double *average);
+static int sendJSON(int ServerSocket, int port, char *ip, int size, char *JSON);
+pthread_t tid[1];
+pthread_mutex_t lock;
 int main(int argc, char **argv)
 {
     if (argc != 3)
@@ -15,28 +19,64 @@ int main(int argc, char **argv)
         fprintf(stderr, "Not enough arguments\n Enter IP address and Port Number to connect to. \n Example: 10.0.0.1 9009\n");
         exit(1);
     }
-    int modeChosen = DOWNLOAD;
+    int modeChosen = FULLTEST;
+    int ServerSocket = 0;
     time_t rawtime;
     struct tm *timeinfo;
     time(&rawtime);
     timeinfo = gmtime(&rawtime);
     printf("Current GMT time and date: %s", asctime(timeinfo));
     unsigned int randval = 0;
-    if (!getRandomInt(0, SECS, &randval))
+    int command = 0;
+    if (pthread_mutex_init(&lock, NULL) != 0)
     {
-        randval = rand() % SECS;
+        printf("mutex init has failed\n");
+        return -1;
     }
-    if (timeinfo->tm_hour >= 19 && timeinfo->tm_hour <= 22)
+    int rtv = pthread_create(&tid[0], NULL, receiveCommand, (void *)&command);
+    if (rtv != 0)
     {
-        sleep(randval);
-        sendSpeed(argv[1], argv[2], modeChosen);
+        printf(" ERROR;  pthread_create1()   returns   %d\n", rtv);
+        return -1;
     }
-
-    sendSpeed(argv[1], argv[2], modeChosen);
+    while (1)
+    {
+        if (!getRandomInt(0, SECS, &randval))
+        {
+            randval = rand() % SECS;
+        }
+        if (timeinfo->tm_hour >= 19 && timeinfo->tm_hour <= 22)
+        {
+            sleep(randval);
+            sendSpeed(argv[1], argv[2], modeChosen, &ServerSocket);
+        }
+        switch (command)
+        {
+        case 1:
+            printf("Mode = 1\n");
+            break;
+        case 2:
+            printf("Mode = 2\n");
+            break;
+        case 3:
+            printf("Mode = 3\n");
+            break;
+        case 4:
+            printf("Mode = speedTest\n");
+            sendSpeed(argv[1], argv[2], modeChosen, &ServerSocket);
+            break;
+        default:
+            printf("Mode: %d\n",command);
+        }
+        command = 0;
+        sleep(2);
+    }
+    pthread_mutex_destroy(&lock);
+    close(ServerSocket);
     //sleep(300);
     return 0;
 }
-static int sendSpeed(char *IPv4, char *Port, int modeChosen)
+static int sendSpeed(char *IPv4, char *Port, int modeChosen, int *ServerSocket)
 {
     double *DLSpeedArray = calloc(DATAPOINTS, sizeof(double));
     if (DLSpeedArray == NULL)
@@ -49,7 +89,8 @@ static int sendSpeed(char *IPv4, char *Port, int modeChosen)
         free(DLSpeedArray);
         return -1;
     }
-    int mode = speedTest(IPv4, Port, DLSpeedArray, UPSpeedArray, modeChosen);
+    int mode = speedTest(ServerSocket, IPv4, Port, DLSpeedArray, UPSpeedArray, modeChosen);
+    /*
     if (mode == FULLTEST)
     {
         for (int i = 0; i < DATAPOINTS; i++)
@@ -61,17 +102,18 @@ static int sendSpeed(char *IPv4, char *Port, int modeChosen)
     {
         for (int i = 0; i < DATAPOINTS; i++)
         {
-            fprintf(stderr, "Download[%d]: %lf\n", i,DLSpeedArray[i]);
+            fprintf(stderr, "Download[%d]: %lf\n", i, DLSpeedArray[i]);
         }
     }
     else if (mode == UPLOAD)
     {
         for (int i = 0; i < DATAPOINTS; i++)
         {
-            fprintf(stderr, "Upload[%d]: %lf\n", i,UPSpeedArray[i]);
+            fprintf(stderr, "Upload[%d]: %lf\n", i, UPSpeedArray[i]);
         }
     }
-    else if (mode == -1)
+    */
+    if (mode == -1)
     {
         return -1;
     }
@@ -80,7 +122,9 @@ static int sendSpeed(char *IPv4, char *Port, int modeChosen)
     {
         return -1;
     }
-    int length = createJSON(DLSpeedArray, UPSpeedArray, JSON, &length, mode);
+    int length = 0;
+    createJSON(DLSpeedArray, UPSpeedArray, JSON, &length, mode);
+    sendJSON(*ServerSocket, strtol(Port, NULL, 10), IPv4, length, JSON);
     free(JSON);
     free(DLSpeedArray);
     free(UPSpeedArray);
@@ -94,7 +138,7 @@ int getRandomInt(int low, int high, unsigned int *randval)
     {
         return -1;
     }
-    if (fread(randval, sizeof(randval), 1, f))
+    if (fread(randval, sizeof(unsigned int), 1, f))
     {
         *randval = *randval % (high - low);
         fclose(f);
@@ -111,7 +155,7 @@ static int createJSON(double *DLSpeedArray, double *UPSpeedArray, char *JSON, in
     int position = 0;
     catString(JSON, &position, "{\n");
     catString(JSON, &position, "\"SpeedTest\": {\n");
-    char* speedBuffer = malloc(sizeof(char)*100);
+    char *speedBuffer = malloc(sizeof(char) * 100);
     if (mode == FULLTEST || mode == DOWNLOAD)
     {
         catString(JSON, &position, "    \"Download\": {\n");
@@ -185,8 +229,7 @@ static int createJSON(double *DLSpeedArray, double *UPSpeedArray, char *JSON, in
     }
     catString(JSON, &position, "   }\n}");
     fprintf(fp, "%s", JSON);
-    //*JSONlength = position;
-    //printf("%d\n", *JSONlength);
+    *JSONlength = position;
     fclose(fp);
     free(speedBuffer);
     return 0;
@@ -223,4 +266,77 @@ static void getMaxMinAvg(double *DLSpeedArray, double *max, double *min, double 
     }
     *average = total / DATAPOINTS;
     return;
+}
+static int sendJSON(int ServerSocket, int port, char *ip, int size, char *JSON)
+{
+    int sent = 0;
+    long bytes = 0;
+    char cont[] = "HTTP/1.1 100 Continue";
+    //printf("Port: %d\n", port);
+    //printf("IP: %s\n", ip);
+    //printf("Size: %d",size);
+    dprintf(ServerSocket, "POST /JSONPHP.php HTTP/1.1\r\nHost: %s:%d\r\n"
+                          "User-Agent: VIPTest\r\nAccept: */*\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n"
+                          "Content-Type: multipart/form-data;\r\nExpect: 100-continue\r\n\r\n",
+            ip, port, size);
+    char *recv_buffer = malloc(sizeof(char) * buff_size);
+    if (recv_buffer == NULL)
+    {
+        return -1;
+    }
+    recv(ServerSocket, recv_buffer, buff_size, 0);
+    if (strncmp(recv_buffer, cont, strlen(cont)) != 0)
+    {
+        free(recv_buffer);
+        fprintf(stderr, "%s received\n", recv_buffer);
+        return -1;
+    }
+    else
+    {
+        //fprintf(stderr,"HTTP/1.1 100 Continue Received\n");
+    }
+    //printf("%s",recv_buffer);
+    char *send_buffer = calloc((size), sizeof(char));
+    if (send_buffer == NULL)
+    {
+        free(recv_buffer);
+        return -1;
+    }
+    memcpy(send_buffer, JSON, size);
+    while (1)
+    {
+        sent = send(ServerSocket, send_buffer, (size), 0);
+        bytes = bytes + sent;
+        if (bytes >= size)
+        {
+            break;
+        }
+        send_buffer = &send_buffer[sent];
+        size = size - sent;
+    }
+    memset(recv_buffer, 0, buff_size);
+    recv(ServerSocket, recv_buffer, buff_size, 0);
+    char response[] = "HTTP/1.1 200 OK\r\n";
+    //printf("\n%.13s",recv_buffer);
+    //printf("\nbytes: %ld,  size: %d\n",bytes,size);
+
+    if ((strncmp(recv_buffer, response, strlen(response)) == 0))
+    {
+
+        fprintf(stderr,"HTTP OK received\n");
+        //printf("\n%s", recv_buffer);
+        //double usecs = (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usecs
+        //becomes Mb/s
+    }
+    else
+    {
+        fprintf(stderr, "%s", recv_buffer);
+        free(recv_buffer);
+        free(send_buffer);
+        return -1;
+    }
+    free(recv_buffer);
+    free(send_buffer);
+    //shutdown(ServerSocket,1);
+    return 0;
 }

@@ -4,11 +4,11 @@ static int sending(int ServerSocket, double *speed, int port, char *ip, int pack
 static int repeatTester(struct sockaddr_in server, int ServerSocket, double *DLSpeed, double *UPSpeed, int *packets, int *filesize, int mode);
 static void packetSize(int *packets, int *filesize, double DLSpeed, double UPSpeed);
 
-int speedTest(char *IPv4, char *port, double *DLSpeedArray, double *UPSpeedArray, int mode)
+int speedTest(int* ServerSocket, char *IPv4, char *port, double *DLSpeedArray, double *UPSpeedArray, int mode)
 {
   struct sockaddr_in server;
-  const int ServerSocket = socket(AF_INET, SOCK_STREAM, 0);
-  if (ServerSocket == -1)
+  *ServerSocket = socket(AF_INET, SOCK_STREAM, 0);
+  if (*ServerSocket == -1)
   {
     perror("socket: ");
     return -1;
@@ -21,7 +21,7 @@ int speedTest(char *IPv4, char *port, double *DLSpeedArray, double *UPSpeedArray
   }
   server.sin_port = htons(strtol(port, NULL, 10));
   bzero(&server.sin_zero, 8);
-  if (connect(ServerSocket, (struct sockaddr *)&server, sizeof(server)) < 0)
+  if (connect(*ServerSocket, (struct sockaddr *)&server, sizeof(server)) < 0)
   {
     fprintf(stderr, "Connection Failed \n");
     return -1;
@@ -38,7 +38,7 @@ int speedTest(char *IPv4, char *port, double *DLSpeedArray, double *UPSpeedArray
   double progress = 0;
   for (int i = 0; i < DATAPOINTS; i++)
   {
-    flag = repeatTester(server, ServerSocket, &DLSpeed, &UPSpeed, &packets, &filesize, mode);
+    flag = repeatTester(server, *ServerSocket, &DLSpeed, &UPSpeed, &packets, &filesize, mode);
     packetSize(&packets, &filesize, DLSpeed, UPSpeed);
     //printf("New packets: %d\n",packets);
     //printf("New filesize: %d\n",filesize);
@@ -58,7 +58,7 @@ int speedTest(char *IPv4, char *port, double *DLSpeedArray, double *UPSpeedArray
     }
     printf("%0.2lf%% done\n", progress);
   }
-  close(ServerSocket);
+  //close(*ServerSocket);
   if (flag == FULLTEST)
   {
     return FULLTEST;
@@ -258,7 +258,7 @@ static int sending(int ServerSocket, double *speed, int port, char *ip, int pack
   srand(time(0));
   for (int i = 0; i < buff_size; i++)
   {
-    send_buffer[i] = rand() % 256;
+    send_buffer[i] = rand() % 255;
   }
   //gettimeofday(&start, NULL);
   clock_gettime(CLOCK_REALTIME, &start);
